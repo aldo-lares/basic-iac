@@ -1,0 +1,58 @@
+name: Sync Repository from External Source
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 6 * * *'  # Runs at midnight Mexico City/Monterrey time (UTC-6/UTC-5)
+
+jobs:
+  sync-repository:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install git-filter-repo
+        run: |
+          pip install git-filter-repo
+
+      - name: Clone source repository (Repo A)
+        run: |
+          git clone --mirror ${{ secrets.SOURCE_REPO_URL }} /tmp/source-repo
+          cd /tmp/source-repo
+          
+          # Create temporary script to use secrets in filter-repo
+          cat > /tmp/filter_script.py << 'EOF'
+          import sys
+          
+          def email_callback(email):
+              return "${{ secrets.BOT_EMAIL }}".encode('utf-8')
+              
+          def name_callback(name):
+              return "${{ secrets.BOT_NAME }}".encode('utf-8')
+              
+          def message_callback(message):
+              return message
+          EOF
+          
+          # Rewrite all commit history using the identity from secrets
+          git filter-repo --force \
+            --email-callback "$(cat /tmp/filter_script.py); email_callback" \
+            --name-callback "$(cat /tmp/filter_script.py); name_callback" \
+            --message-callback "$(cat /tmp/filter_script.py); message_callback"
+          
+          # Clean up the temporary script
+          rm /tmp/filter_script.py
+
+      - name: Checkout target repository (Repo B)
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.REPO_SYNC_PAT }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "${{ secrets.BOT_NAME }}"
+          git config user.email "${{ secrets.BOT_EMAIL }}"
+
+      - name: Sync repositories
+        run: |
+          # Create a temporary branch to store Repo B's local changes
+          git checkout -b temp-local-changes
